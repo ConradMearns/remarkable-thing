@@ -1,8 +1,8 @@
 """rmsync CLI: init/push/pull a markdown(+typst) file to a reMarkable notebook page.
 
-  .venv/bin/python -m rmsync.sync init  <md> "<name>" [--folder "A/B"]
-  .venv/bin/python -m rmsync.sync push  <md> [--force]
-  .venv/bin/python -m rmsync.sync pull  <md> [--force]
+  uv run rmsync md init  <md> "<name>" [--folder "A/B"]
+  uv run rmsync md push  <md> [--force]
+  uv run rmsync md pull  <md> [--force]
 
 push refuses when the device text changed since the last sync (pull first); pull refuses
 when the local md changed since the last sync (push first). --force overrides.

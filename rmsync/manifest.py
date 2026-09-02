@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS documents (
     page_uuid TEXT NOT NULL,
     synced_md TEXT
 );
+CREATE TABLE IF NOT EXISTS pdf_docs (
+    uuid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    src_path TEXT NOT NULL UNIQUE
+);
 CREATE TABLE IF NOT EXISTS pages (
     doc_uuid TEXT NOT NULL,
     page_uuid TEXT NOT NULL,
@@ -67,6 +72,17 @@ class Manifest:
             row = self.db.execute("SELECT * FROM documents WHERE md_path=?", (md_path,)).fetchone()
         else:
             raise ValueError("uuid or md_path required")
+        return dict(row) if row else None
+
+    # pdf documents
+    def upsert_pdf_doc(self, uuid: str, name: str, src_path: str) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO pdf_docs(uuid,name,src_path) VALUES(?,?,?) ON CONFLICT(uuid) DO UPDATE "
+                            "SET name=excluded.name, src_path=excluded.src_path", (uuid, name, src_path))
+
+    def get_pdf_doc(self, uuid: str | None = None, src_path: str | None = None) -> dict | None:
+        q, a = ("uuid", uuid) if uuid else ("src_path", src_path)
+        row = self.db.execute(f"SELECT * FROM pdf_docs WHERE {q}=?", (a,)).fetchone()
         return dict(row) if row else None
 
     # pages

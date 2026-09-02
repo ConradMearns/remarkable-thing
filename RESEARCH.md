@@ -185,3 +185,10 @@ page with 4 hatch-rendered equations scrolls smoothly on the rM2.
   to strokes (scaled to fit 936 units); other formats become a labelled placeholder box on the tablet
   (Typst's SVG output embeds rasters as base64 <image>, which cannot become strokes).
 - Verified on device: TEST 02 pull → two ink SVGs; TEST 04 push with an SVG drawing + PNG placeholder → pull matches.
+
+## PDF path — 2026-09-02
+
+`rmsync pdf init|push|pull` (`rmsync/pdfsync.py`): Typst → PDF (`typst compile`) uploaded as a
+`fileType: pdf` document; `cPages.pages` entries carry `redir.value` = PDF page index, so replacing
+the PDF keeps annotations attached by page number. Verified on device with "SYNC TEST 06 (pdf)".
+Project now uses `uv` (`pyproject.toml`, console script `rmsync` with `md` / `pdf` subcommands).

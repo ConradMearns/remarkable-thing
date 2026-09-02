@@ -15,7 +15,7 @@ def _abs_points(group: si.Group, anchor_y: float):
             yield from _abs_points(child, anchor_y)
 
 
-def render_groups(groups, path: str, line_y=None) -> int:
+def render_groups(groups, path: str, line_y=None, viewbox=None) -> int:
     """Write the strokes of `groups` (list of si.Group anchored to the same paragraph) to `path`.
     `line_y` optionally maps a group's anchor id to a y offset (wrapped-line position); default 0.
     Returns the number of strokes written."""
@@ -27,8 +27,11 @@ def render_groups(groups, path: str, line_y=None) -> int:
         return 0
     xs = [x for _, pts in strokes for x, _, _ in pts]
     ys = [y for _, pts in strokes for _, y, _ in pts]
-    x0, y0 = min(xs) - PAD, min(ys) - PAD
-    w, h = max(xs) - min(xs) + 2 * PAD, max(ys) - min(ys) + 2 * PAD
+    if viewbox:                                   # fixed page space (PDF overlays)
+        x0, y0, w, h = viewbox
+    else:                                         # crop to the ink
+        x0, y0 = min(xs) - PAD, min(ys) - PAD
+        w, h = max(xs) - min(xs) + 2 * PAD, max(ys) - min(ys) + 2 * PAD
     with open(path, "w") as f:
         f.write(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x0:.1f} {y0:.1f} {w:.1f} {h:.1f}" '
                 f'width="{w:.0f}" height="{h:.0f}">\n')
