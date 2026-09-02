@@ -4,6 +4,7 @@ Coordinates are group-local: x in 0..936 (typst pt == device unit at page width 
 y from 0 at the top of the rendered block. Glyphs are emitted as outline strokes.
 """
 import io
+import os
 import re
 import subprocess
 
@@ -133,10 +134,47 @@ def _line(pts, st) -> si.Line:
                            for x, y in pts])
 
 
-def render(source: str, style: str | None = None):
-    """Typst source -> (lines, height, width). Lines are si.Line in group-local units."""
+MD_MARK = "// rmsync: md "
+_MD_IMG = re.compile(r"^!\[(.*?)\]\((.+?)\)\s*$")
+
+
+def image_source(md_line: str) -> str:
+    """Gen-block source for a markdown image line (kept verbatim so pull can re-emit the line)."""
+    return MD_MARK + md_line.strip()
+
+
+def render_image(md_line: str, st, base_dir: str = "."):
+    """`![alt](path)` -> strokes. SVG files are flattened directly (scaled to fit the text width);
+    other images become a labelled placeholder box."""
+    m = _MD_IMG.match(md_line.strip())
+    alt, path = (m[1], m[2]) if m else ("", md_line)
+    full = path if os.path.isabs(path) else os.path.join(base_dir, path)
+    if path.lower().endswith(".svg") and os.path.exists(full):
+        svg_text = open(full).read()
+        svg = SVG.parse(io.StringIO(svg_text), ppi=96)
+        vb = svg.viewbox
+        w0, h0 = (float(vb.width), float(vb.height)) if vb else (float(svg.width), float(svg.height))
+        sc = min(1.0, WIDTH / w0) if w0 else 1.0
+        polys = svg_polylines(svg_text, hatch=st["hatch"])
+        lines = [_line([(x * sc, y * sc) for x, y in p], st) for p in polys]
+        return lines, h0 * sc, w0 * sc
+    label = alt or os.path.basename(path)
+    src = (f"#rect(width: 100%, height: 120pt, stroke: 1pt, inset: 12pt)"
+           f"[#align(center + horizon)[#text(size: 22pt)[image: {label}]]]")
+    return _render_typst(src, st)
+
+
+def render(source: str, style: str | None = None, base_dir: str = "."):
+    """Typst source -> (lines, height, width). Lines are si.Line in group-local units.
+    Sources starting with MD_MARK are markdown image lines (paths relative to base_dir)."""
     m = _STYLE_RE.search(source)
     st = STYLES[style or (m.group(1) if m else DEFAULT_STYLE)]
+    if source.startswith(MD_MARK):
+        return render_image(source[len(MD_MARK):].split("\n", 1)[0], st, base_dir)
+    return _render_typst(source, st)
+
+
+def _render_typst(source: str, st):
     svg_text = compile_svg(source)
     svg = SVG.parse(io.StringIO(svg_text), ppi=72)
     width, height = float(svg.viewbox.width), float(svg.viewbox.height)

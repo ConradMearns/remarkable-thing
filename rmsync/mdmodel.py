@@ -17,10 +17,18 @@ class TypstBlock:
     hash: str
 
 @dataclass(frozen=True)
-class InkNote:
-    n_strokes: int
+class Image:
+    """A markdown image line `![alt](path)`. Device ink comes back as images under `<md>.ink/`."""
+    alt: str
+    path: str
 
-Block = TextPara | TypstBlock | InkNote
+    @property
+    def is_ink(self) -> bool:
+        return ".ink/" in self.path.replace("\\", "/")
+
+Block = TextPara | TypstBlock | Image
+
+_IMG_RE = re.compile(r"^!\[(.*?)\]\((.+?)\)\s*$")
 
 _INK_RE = re.compile(r"^\s*<!--\s*ink:\s*(\d+)\s+strokes?\s*-->\s*$")
 _FENCE_OPEN = re.compile(r"^```typst\s*$")
@@ -76,6 +84,9 @@ def parse_doc(md: str) -> list[Block]:
         if _INK_RE.match(line):
             i += 1
             continue
+        if m := _IMG_RE.match(line):
+            out.append(Image(m[1], m[2])); i += 1
+            continue
         if line.strip() == "---":
             out.append(PageBreak()); i += 1
             continue
@@ -92,8 +103,8 @@ def render_block(b: Block) -> str:
         return _PREFIX.get(b.style, "") + b.text
     if isinstance(b, TypstBlock):
         return f"```typst\n{b.source}\n```"
-    if isinstance(b, InkNote):
-        return f"<!-- ink: {b.n_strokes} strokes -->"
+    if isinstance(b, Image):
+        return f"![{b.alt}]({b.path})"
     if isinstance(b, PageBreak):
         return "---"
     raise TypeError(b)

@@ -172,3 +172,16 @@ outlines). Documents may now start with a Typst block or be empty: sync inserts 
 not author-first. Consequence: our allocator now seeds above the max part2 of *all* authors on the page
 (`max_id(blocks)`), so laptop restyles always win when they are the newer edit. Also confirmed: a 260-paragraph
 page with 4 hatch-rendered equations scrolls smoothly on the rM2.
+
+## Images — 2026-09-02
+
+- **Ink → markdown images.** `pull` exports every paragraph's anchored ink groups to `<md>.ink/p<page>-<start id>.svg`
+  (`rmsync/ink_svg.py`, pen widths/colours/opacity from rmc's pen model, cropped viewBox) and emits
+  `![ink: N strokes](<md>.ink/…)`. Groups anchored to characters inside a wrapped paragraph are placed at
+  the paragraph's first line (their true line offset needs text layout we don't have), so multi-line
+  overwrites may be vertically compressed. The `.ink/` dir is regenerated on every pull.
+- **Laptop images → tablet.** `![alt](path)` lines are generated blocks whose manifest source is the markdown
+  line itself (`// rmsync: md ![alt](path)`), so pull re-emits the line verbatim. SVG files are flattened
+  to strokes (scaled to fit 936 units); other formats become a labelled placeholder box on the tablet
+  (Typst's SVG output embeds rasters as base64 <image>, which cannot become strokes).
+- Verified on device: TEST 02 pull → two ink SVGs; TEST 04 push with an SVG drawing + PNG placeholder → pull matches.

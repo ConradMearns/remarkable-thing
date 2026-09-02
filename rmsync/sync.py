@@ -14,6 +14,8 @@ from __future__ import annotations
 import difflib
 import json
 import math
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -28,7 +30,8 @@ from rmscene import scene_items as si
 
 from . import mdmodel, typst_ink
 from .manifest import Manifest
-from .mdmodel import TextPara, TypstBlock, InkNote
+from .mdmodel import TextPara, TypstBlock, Image
+from . import ink_svg
 from .textcrdt import TextState, IdAlloc, END
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +101,38 @@ def gen_label(b) -> bool:
 
 
 # ---------------------------------------------------------------- tokens
+def as_gen(b):
+    """Laptop-side images are pushed as generated blocks whose source is the markdown line itself."""
+    if isinstance(b, Image):
+        src = typst_ink.image_source(f"![{b.alt}]({b.path})")
+        return TypstBlock(src, mdmodel.typst_hash(src))
+    return b
+
+
+def from_gen(source: str, h: str):
+    if source.startswith(typst_ink.MD_MARK):
+        m = mdmodel._IMG_RE.match(source[len(typst_ink.MD_MARK):])
+        if m: return Image(m[1], m[2])
+    return TypstBlock(source, h)
+
+
+def group_index(blocks) -> dict:
+    """node_id -> si.Group with children populated, for every group in the page."""
+    import io
+    from rmscene import read_tree
+    buf = io.BytesIO()
+    write_blocks(buf, blocks)
+    buf.seek(0)
+    tree = read_tree(buf)
+    out = {}
+    def walk(g):
+        for c in g.children.values():
+            if isinstance(c, si.Group):
+                out[c.node_id] = c; walk(c)
+    walk(tree.root)
+    return out
+
+
 def current_tokens(ts: TextState, gen_blocks: list[dict]):
     """Group the page's paragraphs into diff tokens. gen_blocks must be intact (see Page.intact).
     Returns (tokens, spans): tokens[i] is (style, text) or ('typst', hash);
@@ -123,8 +158,8 @@ def target_tokens(blocks):
 class Page:
     """One .rm page: blocks + TextState + generated-group bookkeeping."""
 
-    def __init__(self, blocks, man: Manifest, page_uuid: str):
-        self.blocks, self.man, self.page_uuid = list(blocks), man, page_uuid
+    def __init__(self, blocks, man: Manifest, page_uuid: str, base_dir: Path | str = "."):
+        self.blocks, self.man, self.page_uuid, self.base_dir = list(blocks), man, page_uuid, Path(base_dir)
         self.text_block = next(b for b in self.blocks if isinstance(b, RootTextBlock))
         self.ts = TextState(self.text_block.value)
         self.alloc = IdAlloc(AUTHOR, max(man.next_id(page_uuid, AUTHOR), FIRST_ID, max_id(self.blocks) + 1))
@@ -205,7 +240,7 @@ class Page:
     # --- the diff
     def apply(self, target: list):
         """Edit the page so its content matches `target` (list of TextPara/TypstBlock)."""
-        target = [b for b in target if not isinstance(b, InkNote)]
+        target = [as_gen(b) for b in target if not (isinstance(b, Image) and b.is_ink)]
         if not target or isinstance(target[0], TypstBlock):
             # The first paragraph has no "\n" id to anchor to, so a leading Typst block (or an empty
             # document) gets an empty text paragraph in front of it.
@@ -213,7 +248,7 @@ class Page:
         rendered = {}   # hash -> (lines, n_lines)
         for b in target:
             if isinstance(b, TypstBlock) and b.hash not in rendered:
-                lines, h, _ = typst_ink.render(b.source)
+                lines, h, _ = typst_ink.render(b.source, base_dir=str(self.base_dir))
                 rendered[b.hash] = (lines, max(1, math.ceil(h / LINE_H)))
 
         paras = self.ts.paragraphs()
@@ -296,8 +331,9 @@ class Page:
         self.blocks = canonical(self.blocks)
 
     # --- reading back
-    def to_blocks(self) -> list:
-        """Page -> markdown model (text paras, typst blocks from manifest, ink notes)."""
+    def to_blocks(self, ink_dir: Path | None = None, page_no: int = 0) -> list:
+        """Page -> markdown model (text paras, typst/image blocks from manifest, ink images).
+        With `ink_dir`, each paragraph's ink is written to `<ink_dir>/p<page_no>-<start id>.svg`."""
         strokes = {}
         for b in self.blocks:
             if isinstance(b, SceneLineItemBlock) and b.item.deleted_length == 0:
@@ -307,13 +343,21 @@ class Page:
         # The device anchors ink either to a paragraph's "\n" (type 2) or to a single character inside a
         # paragraph (type 1, written over text); resolve both to the containing paragraph's start id.
         para_of = {self.ts.chars[i].id: p.start for p in paras for i in p.idx}
-        ink = {}   # paragraph start id -> total strokes
+        ink = {}   # paragraph start id -> [group node ids]
         for b in self.blocks:
             if isinstance(b, TreeNodeBlock) and b.group.anchor_id and b.group.node_id not in gen_nodes \
                     and strokes.get(b.group.node_id):
                 a = b.group.anchor_id.value
-                key = para_of.get(a, a)
-                ink[key] = ink.get(key, 0) + strokes[b.group.node_id]
+                ink.setdefault(para_of.get(a, a), []).append(b.group.node_id)
+        groups = group_index(self.blocks) if ink else {}
+        def ink_block(key, nodes):
+            n = sum(strokes[nid] for nid in nodes)
+            name = f"p{page_no}-{key.part1}-{key.part2}.svg"
+            if ink_dir is None:
+                return Image(f"ink: {n} strokes", f"unexported.ink/{name}")
+            ink_dir.mkdir(parents=True, exist_ok=True)
+            ink_svg.render_groups([groups[nid] for nid in nodes], str(ink_dir / name))
+            return Image(f"ink: {n} strokes", os.path.relpath(ink_dir / name, self.base_dir))
         # Broken blocks (device typed into / deleted reserved lines): the typst block goes where its first
         # surviving reserved paragraph is, typed text stays as text, leftover empty reserved lines are dropped.
         broken = [g for g in self.gen.values() if not self.intact(g, paras)]
@@ -326,16 +370,17 @@ class Page:
         out = []
         cur, spans = current_tokens(self.ts, [g for g in self.gen.values() if g not in broken])
         for tok, (p0, p1, g) in zip(cur, spans):
-            if p0 in place: out.append(TypstBlock(place[p0]["source"], place[p0]["source_hash"]))
+            if p0 in place: out.append(from_gen(place[p0]["source"], place[p0]["source_hash"]))
             if g is not None:
-                out.append(TypstBlock(g["source"], g["source_hash"]))
+                out.append(from_gen(g["source"], g["source_hash"]))
             elif p0 not in skip:
                 out.append(TextPara(*tok))
             keys = [paras[k].start for k in range(p0, p1)] + ([SENTINEL_TOP] if p0 == 0 else [])
-            n = sum(ink.pop(a, 0) for a in keys)
-            if n: out.append(InkNote(n))
-        out += [TypstBlock(g["source"], g["source_hash"]) for g in tail]
-        if ink: out.append(InkNote(sum(ink.values())))   # sentinel-anchored / unresolved ink at the end
+            for a in keys:
+                if a in ink: out.append(ink_block(a, ink.pop(a)))
+        out += [from_gen(g["source"], g["source_hash"]) for g in tail]
+        for a, nodes in ink.items():   # sentinel-anchored / unresolved ink at the end
+            out.append(ink_block(a, nodes))
         return out
 
 
@@ -394,12 +439,12 @@ class Doc:
     def rm_path(self, page_uuid: str) -> Path:
         return STAGE / self.uuid / f"{page_uuid}.rm"
 
-    def page(self, page_uuid: str, man: Manifest) -> Page:
+    def page(self, page_uuid: str, man: Manifest, base_dir: Path | str = ".") -> Page:
         p = self.rm_path(page_uuid)
         if p.exists():
             with open(p, "rb") as f:
-                return Page(read_blocks(f), man, page_uuid)
-        return Page(empty_page_blocks(), man, page_uuid)    # device page without an .rm yet
+                return Page(read_blocks(f), man, page_uuid, base_dir)
+        return Page(empty_page_blocks(), man, page_uuid, base_dir)    # device page without an .rm yet
 
     def add_page(self) -> str:
         pu = str(uuid4())
@@ -474,19 +519,29 @@ def content(md: str) -> list:
     """Text + typst blocks (ink notes ignored, pages normalised) of a markdown string, for change detection."""
     out = []
     for i, page in enumerate(mdmodel.split_pages(mdmodel.parse_doc(md))):
-        blocks = [b for b in page if not isinstance(b, InkNote)]
+        blocks = [as_gen(b) for b in page if not (isinstance(b, Image) and b.is_ink)]
         if not blocks or isinstance(blocks[0], TypstBlock):   # same normalisation Page.apply performs
             blocks = [TextPara(PS.PLAIN, "")] + blocks
         out += ([mdmodel.PageBreak()] if i else []) + blocks
     return out
 
 
-def render_device(doc: Doc, man: Manifest) -> tuple[str, dict, list]:
-    """Markdown of the whole device document (pages joined by ---), the Page objects and block list."""
+def ink_dir_for(md_path: str) -> Path:
+    p = Path(md_path)
+    return p.with_name(p.stem + ".ink")
+
+
+def render_device(doc: Doc, man: Manifest, md_path: str, export_ink: bool = False) -> tuple[str, dict, list]:
+    """Markdown of the whole device document (pages joined by ---), the Page objects and block list.
+    With export_ink, device ink is written as SVGs under <md>.ink/ (the directory is regenerated)."""
+    base = Path(md_path).parent
+    ink_dir = ink_dir_for(md_path) if export_ink else None
+    if ink_dir and ink_dir.exists():
+        shutil.rmtree(ink_dir)
     pages, blocks = {}, []
     for i, pu in enumerate(doc.order):
-        pages[pu] = doc.page(pu, man)
-        blocks += ([mdmodel.PageBreak()] if i else []) + pages[pu].to_blocks()
+        pages[pu] = doc.page(pu, man, base)
+        blocks += ([mdmodel.PageBreak()] if i else []) + pages[pu].to_blocks(ink_dir, i + 1)
     return mdmodel.render_doc(blocks), pages, blocks
 
 
@@ -496,18 +551,18 @@ def finish_sync(man: Manifest, doc: Doc, pages: dict, name: str, md_path: str, e
     for page in pages.values():
         page.commit()
     man.set_pages(doc.uuid, doc.order)
-    synced, _, _ = render_device(doc, man)
+    synced, _, _ = render_device(doc, man, md_path)
     man.upsert_document(doc.uuid, name, md_path, doc.order[0], synced)
 
 
-def apply_document(doc: Doc, man: Manifest, md: str) -> tuple[dict, list[str]]:
+def apply_document(doc: Doc, man: Manifest, md: str, md_path: str) -> tuple[dict, list[str]]:
     """Edit every page so the document matches the markdown. Returns (pages written, kept extra pages)."""
     targets = mdmodel.split_pages(mdmodel.parse_doc(md))
     order = doc.order
     pages, kept = {}, []
     for k, tblocks in enumerate(targets):
         pu = order[k] if k < len(order) else doc.add_page()
-        page = doc.page(pu, man)
+        page = doc.page(pu, man, Path(md_path).parent)
         page.apply(tblocks)
         pages[pu] = page
     for pu in order[len(targets):]:                 # device has more pages than the markdown
@@ -527,7 +582,7 @@ def cmd_init(md: str, name: str, folder: str = ""):
         sys.exit(f"{md_path} already initialised")
     parent, new_folders = resolve_folder(folder) if folder else ("", [])
     doc = Doc.new(str(uuid4()), name, parent)
-    pages, _ = apply_document(doc, man, Path(md).read_text())
+    pages, _ = apply_document(doc, man, Path(md).read_text(), md_path)
     finish_sync(man, doc, pages, name, md_path, new_folders)
     print(f"init {name}: doc {doc.uuid}, {len(pages)} pages, "
           f"{sum(len(p.gen) for p in pages.values())} typst blocks" + (f", in folder {folder}" if folder else ""))
@@ -539,9 +594,9 @@ def cmd_push(md: str, force: bool = False):
     rsync_from_device(docrow["uuid"])
     doc = Doc(docrow["uuid"])
     synced = docrow.get("synced_md")
-    if synced is not None and not force and content(render_device(doc, man)[0]) != content(synced):
+    if synced is not None and not force and content(render_device(doc, man, docrow["md_path"])[0]) != content(synced):
         sys.exit("device text changed since the last sync; pull first (or push --force to overwrite it)")
-    pages, kept = apply_document(doc, man, Path(md).read_text())
+    pages, kept = apply_document(doc, man, Path(md).read_text(), docrow["md_path"])
     finish_sync(man, doc, pages, docrow["name"], docrow["md_path"])
     print(f"push {docrow['name']}: {len(doc.order)} pages, "
           f"{sum(len(p.ts.paragraphs()) for p in pages.values())} paragraphs, "
@@ -557,13 +612,13 @@ def cmd_pull(md: str, force: bool = False):
         sys.exit(f"{local} changed since the last sync; push first (or pull --force to overwrite it)")
     rsync_from_device(docrow["uuid"])
     doc = Doc(docrow["uuid"])
-    rendered, pages, blocks = render_device(doc, man)
+    rendered, pages, blocks = render_device(doc, man, str(local), export_ink=True)
     local.write_text(rendered)
     for page in pages.values():
         page.commit()   # reconciliation of orphan/broken groups happens on the next push; only ids/rows here
     man.set_pages(doc.uuid, doc.order)
     man.upsert_document(doc.uuid, docrow["name"], docrow["md_path"], doc.order[0], rendered)
-    kinds = {k.__name__: sum(isinstance(b, k) for b in blocks) for k in (TextPara, TypstBlock, InkNote)}
+    kinds = {k.__name__: sum(isinstance(b, k) for b in blocks) for k in (TextPara, TypstBlock, Image)}
     print(f"pull {docrow['name']} -> {docrow['md_path']}: {len(doc.order)} pages, {kinds}")
 
 
