@@ -7,4 +7,3 @@ stage/
 sync.db
 __pycache__/
 *.rm
-uv.lock
