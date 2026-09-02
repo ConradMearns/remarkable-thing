@@ -1,3 +1,5 @@
+#import "test06.ink/overlay.typ": ink
+#show: ink
 #set page(width: 157.8mm, height: 210.4mm, margin: 15mm)
 #set text(size: 12pt)
 

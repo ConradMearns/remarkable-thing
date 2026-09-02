@@ -73,9 +73,24 @@ uv run rmsync pdf pull paper.typ                               # export ink to p
 ```
 
 `push` keeps each page's annotations attached to its page number; pages beyond the new page
-count are dropped along with their ink. `pull` writes one SVG per annotated page in the
-tablet's screen space (`viewBox="-702 0 1404 1872"`), so it overlays a page rendered at full
-width. A ready-made `.pdf` can be given instead of a `.typ`.
+count are dropped along with their ink. A ready-made `.pdf` can be given instead of a `.typ`.
+
+`pull` writes, into `paper.ink/`:
+
+- `p<N>.svg`, one per annotated page, in the tablet's screen space (`viewBox="-702 0 1404 1872"`)
+- `p<N>.png`, the page rendered with the ink on top (Typst sources only)
+- `overlay.typ`, a show rule that draws each page's ink as its background
+
+and adds two lines to the top of your `.typ` the first time:
+
+```typst
+#import "paper.ink/overlay.typ": ink
+#show: ink
+```
+
+So `typst compile paper.typ` (or your editor's preview) shows the annotations. `push` compiles
+with `--input rmsync-ink=no`, which turns the overlay off, so the tablet never gets the ink baked
+into the PDF underneath its own live annotations.
 
 For a 1:1 overlay, size the Typst page like the screen:
 
