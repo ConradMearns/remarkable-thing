@@ -92,6 +92,18 @@ So `typst compile paper.typ` (or your editor's preview) shows the annotations. `
 with `--input rmsync-ink=no`, which turns the overlay off, so the tablet never gets the ink baked
 into the PDF underneath its own live annotations.
 
+The same overlay works for Typst's HTML export (experimental in 0.15):
+
+```sh
+typst compile --features html --format html paper.typ paper.html
+```
+
+HTML has no pages, so the ink of page N is inserted into the flow where page N ends: at its
+`#pagebreak()`, or at the end of the document. Each `p<N>-crop.svg` is the page's ink cropped
+to its bounding box, embedded inline and sized relative to the page width. Math comes out as
+MathML and tables as real tables. `#set page` and `#place` are ignored by HTML export, which is
+why the paged and HTML branches of `overlay.typ` differ.
+
 For a 1:1 overlay, size the Typst page like the screen:
 
 ```typst
