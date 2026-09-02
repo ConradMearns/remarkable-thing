@@ -8,5 +8,3 @@ sync.db
 __pycache__/
 *.rm
 *.svg
-*.ink/
-drawing.svg
