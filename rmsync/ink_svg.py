@@ -41,7 +41,9 @@ def render_groups(groups, path: str, line_y=None) -> int:
                     if seg:
                         f.write(_polyline(seg, color, width, opacity, pen))
                         seg = [seg[-1]]
-                    color = pen.get_segment_color(p.speed, p.direction, p.width, p.pressure, last_w)
+                    # rmc shades ballpoint segments gray from pressure, but the rM2 reports pressure 0 and
+                    # draws solid ink; keep the pen's base colour and let width carry the variation.
+                    color = "rgb" + str(tuple(pen.base_color))
                     width = pen.get_segment_width(p.speed, p.direction, p.width, p.pressure, last_w)
                     opacity = pen.get_segment_opacity(p.speed, p.direction, p.width, p.pressure, last_w)
                     last_w = width
