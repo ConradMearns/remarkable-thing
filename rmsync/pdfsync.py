@@ -38,13 +38,19 @@ def compile_pdf(src: Path, out: Path):
 
 def new_pdf_doc(uuid: str, name: str, parent: str) -> Doc:
     doc = Doc.new(uuid, name, parent)
-    doc.content.update({"fileType": "pdf", "orientation": "portrait", "margins": 0})
+    doc.content.update({"fileType": "pdf", "orientation": "portrait", "margins": 125, "coverPageNumber": 0})
     return doc
 
 
 def set_pages(doc: Doc, n: int) -> list[str]:
     """Keep existing page entries (and their annotation files) for indices < n, add/drop the rest."""
-    pages = [p for p in doc.content["cPages"]["pages"] if "deleted" not in p]
+    pages, seen = [], set()
+    for p in doc.content["cPages"]["pages"]:
+        if "deleted" in p: continue
+        r = p.get("redir", {}).get("value")
+        if r in seen:                       # duplicate entry for the same PDF page (device-generated)
+            if not doc.rm_path(p["id"]).exists(): continue
+        seen.add(r); pages.append(p)
     dropped = pages[n:]
     pages = pages[:n]
     for i in range(len(pages), n):
@@ -52,6 +58,8 @@ def set_pages(doc: Doc, n: int) -> list[str]:
                       "redir": {"timestamp": "1:1", "value": i}, "template": {"timestamp": "1:1", "value": "Blank"}})
     doc.content["cPages"]["pages"] = pages
     doc.content["cPages"]["lastOpened"]["value"] = pages[0]["id"]
+    # original = the PDF's own page count; without it xochitl generates a second set of page entries
+    doc.content["cPages"]["original"] = {"timestamp": "1:1", "value": n}
     doc.content["pageCount"] = n
     for p in dropped:
         doc.rm_path(p["id"]).unlink(missing_ok=True)
@@ -118,7 +126,27 @@ def cmd_pull(src: str):
             exported[i] = n
         else:
             (ink_dir / f"p{i}.svg").unlink()
+    if exported and p.suffix == ".typ":
+        composite(p, ink_dir, exported)
     print(f"pull {row['name']}: {len(doc.order)} pages, ink on pages {exported or 'none'} -> {ink_dir}/")
+
+
+def composite(src: Path, ink_dir: Path, pages: dict):
+    """Render annotated pages to <ink_dir>/p<N>.png: the Typst page at 226 ppi with the ink on top."""
+    import cairosvg
+    from PIL import Image
+    r = subprocess.run(["typst", "compile", "--root", "/", "--format", "png", "--ppi", "226",
+                        str(src.resolve()), str(ink_dir / "page{n}.png")], capture_output=True, text=True)
+    if r.returncode:
+        print(f"composite skipped: {r.stderr.strip()[:200]}"); return
+    for n in pages:
+        base = Image.open(ink_dir / f"page{n}.png").convert("RGBA")
+        cairosvg.svg2png(url=str(ink_dir / f"p{n}.svg"), write_to=str(ink_dir / f"overlay{n}.png"),
+                         output_width=base.width, output_height=base.height)
+        base.alpha_composite(Image.open(ink_dir / f"overlay{n}.png").convert("RGBA"))
+        base.save(ink_dir / f"p{n}.png")
+    for f in list(ink_dir.glob("page*.png")) + list(ink_dir.glob("overlay*.png")):
+        f.unlink()
 
 
 def main(argv=None):

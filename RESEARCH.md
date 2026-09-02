@@ -192,3 +192,7 @@ page with 4 hatch-rendered equations scrolls smoothly on the rM2.
 `fileType: pdf` document; `cPages.pages` entries carry `redir.value` = PDF page index, so replacing
 the PDF keeps annotations attached by page number. Verified on device with "SYNC TEST 06 (pdf)".
 Project now uses `uv` (`pyproject.toml`, console script `rmsync` with `md` / `pdf` subcommands).
+- PDF docs need `cPages.original.value` = the PDF's page count; with -1 xochitl generated a second set of
+  page entries (idx `onca…`, same `redir`) and showed 4 pages for a 2-page PDF. Fixed; push also dedupes
+  entries per `redir`. Annotation overlays verified 1:1 on a 157.8×210.4 mm page; `pull` also writes
+  composite PNGs (`<src>.ink/p<N>.png`) for `.typ` sources.
