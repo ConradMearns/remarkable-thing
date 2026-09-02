@@ -1,0 +1,10 @@
+.env
+.venv/
+backup/
+out/
+pulled/
+stage/
+sync.db
+__pycache__/
+*.rm
+*.svg

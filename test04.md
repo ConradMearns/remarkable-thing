@@ -1,0 +1,10 @@
+
+```typst
+$ sum_(k=1)^n k = (n(n+1))/2 $
+```
+
+This notebook starts with a Typst block.
+
+- and has a bullet
+
+- second bullet added on laptop
